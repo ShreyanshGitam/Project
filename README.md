@@ -1,5 +1,5 @@
 # Project
 
-Credentials to Login:\n
-Username: admin\n
+Credentials to Login:
+Username: admin
 Password: password
