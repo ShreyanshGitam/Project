@@ -3,6 +3,7 @@ import socket
 import sqlite3
 import random
 import shutil
+import threading
 from datetime import datetime
 from tkinter import *
 from tkinter import filedialog, messagebox, simpledialog
@@ -17,15 +18,15 @@ import bcrypt
 KEY = b'0123456789abcdef'  # 16-byte key for AES-128
 STORAGE_DIR = "storage"
 
-# Global variables to store images and 4-digit code
-send_image = None
-receive_image = None
-image_icon1 = None
+# Global variables to store images
 codes = {}
 current_user = None
 current_path = None
+selected_file_path = None
+selected_folder_path = None
+move_mode = False
 
-# Database setup
+# Sqlite3 Database setup
 conn = sqlite3.connect('users.db')
 c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS users
@@ -37,10 +38,25 @@ if not os.path.exists(STORAGE_DIR):
     os.makedirs(STORAGE_DIR)
 
 def load_images():
-    global send_image, receive_image, image_icon1, imageicon
-    send_image = PhotoImage(file="Images/send.png").subsample(8, 8)  # Adjust size
-    receive_image = PhotoImage(file="Images/received.png").subsample(8, 8)  # Adjust size
-    image_icon1 = PhotoImage(file="Images/send.png").subsample(4, 4)  # Adjust size
+    global image_cache
+    image_cache = {}
+
+    def load_image(image_path):
+        icon = Image.open(image_path)
+        icon = icon.resize((64, 64), Image.LANCZOS)
+        return ImageTk.PhotoImage(icon)
+
+    image_cache['file'] = load_image("Images/file.png")
+    image_cache['txt'] = load_image("Images/txt.png")
+    image_cache['pdf'] = load_image("Images/pdf.png")
+    image_cache['image'] = load_image("Images/image.png")
+    image_cache['doc'] = load_image("Images/doc.png")
+    image_cache['ppt'] = load_image("Images/ppt.png")
+    image_cache['xls'] = load_image("Images/xls.png")
+    image_cache['audio'] = load_image("Images/audio.png")
+    image_cache['video'] = load_image("Images/video.png")
+    image_cache['zip'] = load_image("Images/zip.png")
+    image_cache['folder'] = load_image("Images/folder.png")
 
 def center_window(window, width, height):
     screen_width = window.winfo_screenwidth()
@@ -60,9 +76,10 @@ def encrypt(data, key):
 
 def decrypt(encrypted_data, key):
     iv = encrypted_data[:16]
+    encrypted_data = encrypted_data[16:]
     cipher = Cipher(algorithms.AES(key), modes.CBC(iv), backend=default_backend())
     decryptor = cipher.decryptor()
-    decrypted_padded_data = decryptor.update(encrypted_data[16:]) + decryptor.finalize()
+    decrypted_padded_data = decryptor.update(encrypted_data) + decryptor.finalize()
     unpadder = padding.PKCS7(algorithms.AES.block_size).unpadder()
     decrypted_data = unpadder.update(decrypted_padded_data) + unpadder.finalize()
     return decrypted_data
@@ -100,18 +117,18 @@ def login_window():
     root = Tk()
     root.title("Login")
     root.geometry("300x200")
-    center_window(root, 300, 200)
+    center_window(root, 280, 140)
     root.configure(bg="#1e1e1e")
     root.resizable(False, False)
 
-    Label(root, text="Username:", bg="#1e1e1e", fg="#ffffff").place(x=50, y=50)
+    Label(root, text="Username:", bg="#1e1e1e", fg="#ffffff").place(x=20, y=20)
     username_entry = Entry(root, width=25, fg="black", border=2, bg='white')
-    username_entry.place(x=130, y=50)
+    username_entry.place(x=90, y=20)
     username_entry.focus()
 
-    Label(root, text="Password:", bg="#1e1e1e", fg="#ffffff").place(x=50, y=100)
+    Label(root, text="Password:", bg="#1e1e1e", fg="#ffffff").place(x=20, y=50)
     password_entry = Entry(root, width=25, fg="black", border=2, bg='white', show='*')
-    password_entry.place(x=130, y=100)
+    password_entry.place(x=90, y=50)
 
     def login():
         global current_user
@@ -120,15 +137,15 @@ def login_window():
         if authenticate(username, password):
             current_user = username
             root.destroy()
-            main_window()
+            file_management_window()  # Directly open file management window after login
         else:
             messagebox.showerror("Login Failed", "Invalid username or password")
 
     def open_register():
         register_window()
 
-    Button(root, text="Login", width=10, height=1, bg="blue", fg="white", command=login).place(x=130, y=150)
-    Button(root, text="Register", width=10, height=1, bg="green", fg="white", command=open_register).place(x=50, y=150)
+    Button(root, text="Login", width=10, height=1, bg="blue", fg="white", command=login).place(x=160, y=90)
+    Button(root, text="Register", width=10, height=1, bg="green", fg="white", command=open_register).place(x=50, y=90)
 
     root.mainloop()
 
@@ -162,54 +179,35 @@ def register_window():
 
     window.mainloop()
 
-def main_window():
-    global root
-    root = Tk()
-    root.title("Share Files")
-    root.geometry("600x400")
-    center_window(root, 600, 400)
-    root.configure(bg="#1e1e1e")
-    root.resizable(False, False)
-
-    load_images()
-
-    # Creating a frame to hold the content
-    main_frame = Frame(root, bg="#1e1e1e")
-    main_frame.pack(fill=BOTH, expand=YES)
-
-    # Adding title
-    app_name = Label(main_frame, text="File Sharer", font=('Broadway', 20, 'bold'), bg="#1e1e1e", fg="#ffffff")
-    app_name.pack(pady=20)
-
-    # Create buttons
-    button_frame = Frame(main_frame, bg="#1e1e1e")
-    button_frame.pack(pady=20)
-
-    send_button = Button(button_frame, image=send_image, bg="#1e1e1e", bd=0, command=Send, highlightthickness=0,
-                         activebackground="#1e1e1e")
-    send_button.grid(row=0, column=0, padx=20)
-
-    receive_button = Button(button_frame, image=receive_image, bg="#1e1e1e", bd=0, command=Receive,
-                            highlightthickness=0, activebackground="#1e1e1e")
-    receive_button.grid(row=0, column=1, padx=20)
-
-    # Label Section
-    send_label = Label(button_frame, text="Send", font=('Verdana', 15, 'bold'), bg="#1e1e1e", fg="#ffffff")
-    send_label.grid(row=1, column=0, pady=10)
-
-    receive_label = Label(button_frame, text="Receive", font=('Verdana', 15, 'bold'), bg="#1e1e1e", fg="#ffffff")
-    receive_label.grid(row=1, column=1, pady=10)
-
-    file_mgmt_button = Button(main_frame, text="File Management", width=20, height=2, bg="#39c790", font="arial 14 bold",
-                              command=file_management_window)
-    file_mgmt_button.pack(pady=20)
-
-    root.mainloop()
-
 def generate_code():
     return str(random.randint(1000, 9999))
 
-def Send():
+def generate_aes_key():
+    return os.urandom(16)
+
+def send_file(key_label):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        host = socket.gethostname()
+        port = 8080
+        s.bind((host, port))
+        s.listen(1)
+        conn, addr = s.accept()
+        with open(selected_file_path, 'rb') as file:
+            encrypted_data = file.read()
+        decrypted_data = decrypt(encrypted_data, KEY)
+        new_key = generate_aes_key()
+        re_encrypted_data = encrypt(decrypted_data, new_key)
+        conn.sendall(re_encrypted_data)
+        conn.close()
+        s.close()
+        key_label.config(text=f"New AES Key: {new_key.hex()}")
+        messagebox.showinfo("Success", "File has been transmitted successfully!")
+    except Exception as e:
+        messagebox.showerror("Error", f"An error occurred: {e}")
+
+def send_window():
     window = Toplevel(root)
     window.title("Send")
     window.geometry('400x300')
@@ -217,100 +215,89 @@ def Send():
     window.configure(bg="#1e1e1e")
     window.resizable(False, False)
 
-    def select_file():
-        global filename
-        filename = filedialog.askopenfilename(initialdir=os.getcwd(), title='Select File')
-        if filename:
-            file_label.config(text=filename)
+    def start_sending():
+        threading.Thread(target=send_file, args=(key_label,)).start()
 
-    def sender():
-        try:
-            s = socket.socket()
-            host = socket.gethostname()
-            port = 8080
-            s.bind((host, port))
-            s.listen(1)
-            conn, addr = s.accept()
-            with open(filename, 'rb') as file:
-                file_data = file.read()
-            encrypted_data = encrypt(file_data, KEY)
-            code = generate_code()
-            codes[code] = encrypted_data
-            conn.send(code.encode())
-            conn.close()
-            user_dir = os.path.join(STORAGE_DIR, f"{current_user}_dir")
-            with open(os.path.join(user_dir, f"{code}.bin"), 'wb') as f:
-                f.write(encrypted_data)
-            messagebox.showinfo("Success", f"File has been transmitted successfully! Code: {code}")
-        except Exception as e:
-            messagebox.showerror("Error", f"An error occurred: {e}")
-
-    window.iconphoto(False, image_icon1)
     host = socket.gethostname()
     Label(window, text=f'Your Device ID: {host}', font='Verdana 12 bold', bg='#1e1e1e', fg='white').place(x=10, y=10)
-    file_label = Label(window, text="No file selected", bg='#1e1e1e', fg='white')
+    file_label = Label(window, text="Selected file: " + (selected_file_path if selected_file_path else "No file selected"), bg='#1e1e1e', fg='white')
     file_label.place(x=10, y=50)
-    Button(window, text="Select File", width=12, height=1, font='arial 12 bold', bg="yellow", fg="blue",
-           command=select_file).place(x=10, y=80)
-    Button(window, text="SEND", width=8, height=1, font='arial 12 bold', bg='#000', fg="#fff", command=sender).place(
-        x=300, y=80)
-
+    Button(window, text="SEND", width=12, height=1, font='arial 12 bold', bg='#000', fg="#fff", command=start_sending).place(x=10, y=80)
+    key_label = Label(window, text="", bg='#1e1e1e', fg='white')
+    key_label.place(x=10, y=120)
     window.mainloop()
 
-def Receive():
-    main = Toplevel(root)
-    main.title("Receive")
-    main.geometry('400x300')
-    center_window(main, 400, 300)
-    main.configure(bg="#1e1e1e")
-    main.resizable(False, False)
+def receive_file(sender_id, aes_key):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        host = sender_id
+        port = 8080
+        s.connect((host, port))
+        all_data = b""
+        while True:
+            data = s.recv(1024)
+            if not data:
+                break
+            all_data += data
+        new_key = bytes.fromhex(aes_key)
+        decrypted_data = decrypt(all_data, new_key)
+        encrypted_data = encrypt(decrypted_data, KEY)
+        user_dir = os.path.join(STORAGE_DIR, f"{current_user}_dir", "received_files")
+        if not os.path.exists(user_dir):
+            os.makedirs(user_dir)
+        filename = f"received_file_{generate_code()}.bin"
+        with open(os.path.join(user_dir, filename), 'wb') as file:
+            file.write(encrypted_data)
+        s.close()
+        messagebox.showinfo("Success", f"File has been received and saved as {filename}")
+    except Exception as e:
+        messagebox.showerror("Error", f"An error occurred: {e}")
 
-    def receiver():
-        try:
-            iD = senderID.get()
-            code = receive_code.get()
-            s = socket.socket()
-            port = 8080
-            s.connect((iD, port))
-            s.send(code.encode())
-            user_dir = os.path.join(STORAGE_DIR, f"{current_user}_dir")
-            file_path = os.path.join(user_dir, f"{code}.bin")
-            if not os.path.exists(file_path):
-                raise ValueError("Invalid code or code expired")
-            with open(file_path, 'rb') as f:
-                encrypted_data = f.read()
-            decrypted_data = decrypt(encrypted_data, KEY)
-            filename = f"received_{code}.txt"
-            with open(os.path.join(user_dir, filename), 'wb') as file:
-                file.write(decrypted_data)
-            s.close()
-            messagebox.showinfo("Success", f"File has been received and saved as {filename}")
-        except Exception as e:
-            messagebox.showerror("Error", f"An error occurred: {e}")
+def receive_window():
+    window = Toplevel(root)
+    window.title("Receive")
+    window.geometry('400x300')
+    center_window(window, 400, 300)
+    window.configure(bg="#1e1e1e")
+    window.resizable(False, False)
 
-    main.iconphoto(False, image_icon1)
+    def start_receiving():
+        sender_id = senderID.get()
+        aes_key = keyEntry.get()
+        threading.Thread(target=receive_file, args=(sender_id, aes_key)).start()
 
-    Label(main, text="Receive Window", font=('Arial', 20), bg="#1e1e1e", fg="#ffffff").place(x=110, y=0)
-
-    Label(main, text="Input sender id", font=('arial', 10, 'bold'), bg="#1e1e1e", fg="#ffffff").place(x=20, y=50)
-    senderID = Entry(main, width=25, fg="black", border=2, bg='white', font=('arial', 15))
+    Label(window, text="Receive Window", font=('Arial', 20), bg="#1e1e1e", fg="#ffffff").place(x=110, y=0)
+    Label(window, text="Input sender ID", font=('arial', 10, 'bold'), bg="#1e1e1e", fg="#ffffff").place(x=20, y=50)
+    senderID = Entry(window, width=25, fg="black", border=2, bg='white', font=('arial', 15))
     senderID.place(x=20, y=75)
     senderID.focus()
 
-    Label(main, text="Enter 4-digit code:", font=('arial', 10, 'bold'), bg="#1e1e1e", fg="#ffffff").place(
-        x=20, y=120)
-    receive_code = Entry(main, width=25, fg="black", border=2, bg="white", font=('arial', 15))
-    receive_code.place(x=20, y=145)
+    Label(window, text="Input AES key", font=('arial', 10, 'bold'), bg="#1e1e1e", fg="#ffffff").place(x=20, y=110)
+    keyEntry = Entry(window, width=25, fg="black", border=2, bg='white', font=('arial', 15))
+    keyEntry.place(x=20, y=135)
 
-    rr = Button(main, text="Receive", compound=LEFT, width=13, bg="#39c790", font="arial 14 bold",
-                command=receiver)
+    rr = Button(window, text="Receive", compound=LEFT, width=13, bg="#39c790", font="arial 14 bold", command=start_receiving)
     rr.place(x=135, y=190)
 
-    main.mainloop()
+    window.mainloop()
 
 def file_management_window():
-    global current_path
+    global root, current_path, selected_file_path, selected_folder_path, move_mode
+    root = Tk()
+    root.title("File Management")
+    root.geometry('1100x600')
+    center_window(root, 1100, 600)
+    root.configure(bg="#1e1e1e")
+    root.resizable(True, True)
+
+    Label(root, text="File Management", font=('Arial', 20), bg="#1e1e1e", fg="#ffffff").pack(pady=10)
+
     current_path = os.path.join(STORAGE_DIR, f"{current_user}_dir")
+    selected_file_path = None
+    selected_folder_path = None
+    move_mode = False
+
+    load_images()
 
     def load_files(path):
         for widget in file_display_frame.winfo_children():
@@ -326,66 +313,95 @@ def file_management_window():
             # Determine icon based on file extension
             _, ext = os.path.splitext(filepath)
             ext = ext.lower()
-            icon_path = "Images/file.png"  # Default icon
+            icon_key = 'file'  # Default icon key
             if ext in ['.txt']:
-                icon_path = "Images/txt.png"
+                icon_key = 'txt'
             elif ext in ['.pdf']:
-                icon_path = "Images/pdf.png"
+                icon_key = 'pdf'
             elif ext in ['.jpg', '.jpeg', '.png']:
-                icon_path = "Images/image.png"
+                icon_key = 'image'
             elif ext in ['.doc', '.docx']:
-                icon_path = "Images/doc.png"
+                icon_key = 'doc'
             elif ext in ['.ppt', '.pptx']:
-                icon_path = "Images/ppt_icon.png"
+                icon_key = 'ppt'
             elif ext in ['.xls', '.xlsx']:
-                icon_path = "Images/xls.png"
+                icon_key = 'xls'
             elif ext in ['.mp3', '.wav']:
-                icon_path = "Images/audio.png"
+                icon_key = 'audio'
             elif ext in ['.mp4', '.mkv']:
-                icon_path = "Images/video_icon.png"
+                icon_key = 'video'
             elif ext in ['.zip', '.rar']:
-                icon_path = "Images/zip.png"
+                icon_key = 'zip'
 
             if os.path.isdir(filepath):
-                icon_path = "Images/folder_icon.png"
+                icon_key = 'folder'
 
-            icon = Image.open(icon_path)
-            icon = icon.resize((64, 64), Image.LANCZOS)
-            img = ImageTk.PhotoImage(icon)
-            icon_label = Label(file_display_frame, image=img, text=file, compound="top", bg="#1e1e1e", fg="white")
+            img = image_cache.get(icon_key, image_cache['file'])
+            icon_label = Label(file_display_frame, image=img, text=file, compound="top", bg="#1e1e1e", fg="white",
+                               font=('Arial', 12, 'bold'))
             icon_label.image = img
             icon_label.grid(row=row, column=col, padx=20, pady=20)
+            icon_label.bind("<Button-1>", lambda e, p=filepath: on_select_file(e, p))
             if os.path.isdir(filepath):
                 icon_label.bind("<Double-1>", lambda e, p=filepath: view_folder(p))
             col += 1
 
+    def on_select_file(event, filepath):
+        global selected_file_path, selected_folder_path, move_mode
+        if not move_mode:
+            selected_file_path = filepath
+            selected_folder_path = None
+            for widget in file_display_frame.winfo_children():
+                widget.config(bg="#1e1e1e", fg="white")
+            event.widget.config(bg="blue", fg="yellow")
+            move_button.config(state=NORMAL)
+
+    def on_select_folder(event, filepath):
+        global selected_folder_path, selected_file_path, move_mode
+        if move_mode:
+            selected_folder_path = filepath
+            for widget in file_display_frame.winfo_children():
+                widget.config(bg="#1e1e1e", fg="white")
+            event.widget.config(bg="green", fg="yellow")
+        else:
+            selected_folder_path = filepath
+            for widget in file_display_frame.winfo_children():
+                widget.config(bg="#1e1e1e", fg="white")
+            event.widget.config(bg="green", fg="yellow")
+
     def view_folder(path):
-        global current_path
+        global current_path, move_mode
         current_path = path
         load_files(current_path)
         back_button.config(state=NORMAL, bg="red")
+        if move_mode:
+            move_button.config(state=NORMAL)
 
     def back():
-        global current_path
-        if current_path != os.path.join(STORAGE_DIR, f"{current_user}_dir"):
-            current_path = os.path.dirname(current_path)
+        global current_path, move_mode
+        parent_dir = os.path.dirname(current_path)
+        user_dir = os.path.join(STORAGE_DIR, f"{current_user}_dir")
+        if parent_dir.startswith(user_dir):
+            current_path = parent_dir
             load_files(current_path)
-            if current_path == os.path.join(STORAGE_DIR, f"{current_user}_dir"):
+            if current_path == user_dir:
                 back_button.config(state=DISABLED, bg="gray")
+        else:
+            back_button.config(state=DISABLED, bg="gray")
+        if move_mode:
+            move_button.config(state=NORMAL)
 
     def delete_file():
-        selected_file = file_display_frame.focus_get().cget("text")
-        if selected_file:
-            os.remove(os.path.join(current_path, selected_file))
+        if selected_file_path:
+            os.remove(selected_file_path)
             load_files(current_path)
-            messagebox.showinfo("Success", f"File {selected_file} has been deleted")
+            messagebox.showinfo("Success", f"File {os.path.basename(selected_file_path)} has been deleted")
 
     def rename_file():
-        selected_file = file_display_frame.focus_get().cget("text")
-        if selected_file:
-            new_name = simpledialog.askstring("Rename File", "Enter new name for the file:", initialvalue=selected_file)
+        if selected_file_path:
+            new_name = simpledialog.askstring("Rename File", "Enter new name for the file:", initialvalue=os.path.basename(selected_file_path))
             if new_name:
-                os.rename(os.path.join(current_path, selected_file), os.path.join(current_path, new_name))
+                os.rename(selected_file_path, os.path.join(current_path, new_name))
                 load_files(current_path)
                 messagebox.showinfo("Success", f"File has been renamed to {new_name}")
 
@@ -400,66 +416,105 @@ def file_management_window():
         filename = filedialog.askopenfilename(initialdir=os.getcwd(), title='Select File to Upload')
         if filename:
             try:
+                with open(filename, 'rb') as file:
+                    file_data = file.read()
+                encrypted_data = encrypt(file_data, KEY)
                 destination = os.path.join(current_path, os.path.basename(filename))
-                with open(filename, 'rb') as fsrc, open(destination, 'wb') as fdst:
-                    fdst.write(fsrc.read())
+                with open(destination, 'wb') as fdst:
+                    fdst.write(encrypted_data)
                 load_files(current_path)
-                messagebox.showinfo("Success", "File has been uploaded successfully")
+                messagebox.showinfo("Success", "File has been uploaded and encrypted successfully")
             except Exception as e:
                 messagebox.showerror("Error", f"An error occurred: {e}")
 
     def download_file():
-        selected_file = file_display_frame.focus_get().cget("text")
-        if selected_file:
-            save_path = filedialog.asksaveasfilename(initialdir=os.getcwd(), title='Save File As', initialfile=selected_file)
+        if selected_file_path:
+            save_path = filedialog.asksaveasfilename(initialdir=os.getcwd(), title='Save File As', initialfile=os.path.basename(selected_file_path))
             if save_path:
                 try:
-                    with open(os.path.join(current_path, selected_file), 'rb') as fsrc, open(save_path, 'wb') as fdst:
-                        fdst.write(fsrc.read())
-                    messagebox.showinfo("Success", "File has been downloaded successfully")
+                    with open(selected_file_path, 'rb') as fsrc:
+                        encrypted_data = fsrc.read()
+                    try:
+                        decrypted_data = decrypt(encrypted_data, KEY)
+                        with open(save_path, 'wb') as fdst:
+                            fdst.write(decrypted_data)
+                        messagebox.showinfo("Success", "File has been decrypted and downloaded successfully")
+                    except ValueError as e:
+                        messagebox.showerror("Error", "Decryption failed. Invalid padding bytes.")
                 except Exception as e:
                     messagebox.showerror("Error", f"An error occurred: {e}")
 
     def move_file():
-        selected_file = file_display_frame.focus_get().cget("text")
-        if selected_file:
-            new_path = filedialog.askdirectory(initialdir=current_path, title='Select Destination Folder')
-            if new_path:
-                try:
-                    shutil.move(os.path.join(current_path, selected_file), os.path.join(new_path, selected_file))
-                    load_files(current_path)
-                    messagebox.showinfo("Success", f"File has been moved to {new_path}")
-                except Exception as e:
-                    messagebox.showerror("Error", f"An error occurred: {e}")
+        global selected_file_path, selected_folder_path, move_mode, current_path
+        if not move_mode and selected_file_path:
+            move_mode = True
+            move_button.config(text="Move Here")
+            disable_buttons()
+        elif move_mode and selected_file_path:
+            try:
+                shutil.move(selected_file_path, os.path.join(current_path, os.path.basename(selected_file_path)))
+                selected_file_path = None
+                selected_folder_path = None
+                move_mode = False
+                move_button.config(text="Move")
+                load_files(current_path)
+                enable_buttons()
+            except Exception as e:
+                messagebox.showerror("Error", f"An error occurred: {e}")
 
-    window = Toplevel(root)
-    window.title("File Management")
-    window.geometry('800x600')
-    center_window(window, 830, 600)
-    window.configure(bg="#1e1e1e")
-    window.resizable(True, True)
+    def disable_buttons():
+        refresh_button.config(state=DISABLED)
+        delete_button.config(state=DISABLED)
+        rename_button.config(state=DISABLED)
+        create_folder_button.config(state=DISABLED)
+        upload_button.config(state=DISABLED)
+        download_button.config(state=DISABLED)
+        send_button.config(state=DISABLED)
+        receive_button.config(state=DISABLED)
 
-    Label(window, text="File Management", font=('Arial', 20), bg="#1e1e1e", fg="#ffffff").pack(pady=10)
+    def enable_buttons():
+        refresh_button.config(state=NORMAL)
+        delete_button.config(state=NORMAL)
+        rename_button.config(state=NORMAL)
+        create_folder_button.config(state=NORMAL)
+        upload_button.config(state=NORMAL)
+        download_button.config(state=NORMAL)
+        send_button.config(state=NORMAL)
+        receive_button.config(state=NORMAL)
+        if current_path == os.path.join(STORAGE_DIR, f"{current_user}_dir"):
+            back_button.config(state=DISABLED, bg="gray")
+        else:
+            back_button.config(state=NORMAL, bg="red")
 
-    file_display_frame = Frame(window, bg="#1e1e1e")
-    file_display_frame.pack(fill=BOTH, expand=YES)
-
-    button_frame = Frame(window, bg="#1e1e1e")
+    button_frame = Frame(root, bg="#1e1e1e")
     button_frame.pack(pady=10)
 
-    Button(button_frame, text="Refresh", width=10, height=1, bg="blue", fg="white", command=lambda: load_files(current_path)).grid(row=0, column=0, padx=10)
-    Button(button_frame, text="Delete", width=10, height=1, bg="red", fg="white", command=delete_file).grid(row=0, column=1, padx=10)
-    Button(button_frame, text="Rename", width=10, height=1, bg="yellow", fg="black", command=rename_file).grid(row=0, column=2, padx=10)
-    Button(button_frame, text="Create Folder", width=12, height=1, bg="cyan", fg="black", command=create_folder).grid(row=0, column=3, padx=10)
-    Button(button_frame, text="Upload", width=10, height=1, bg="purple", fg="white", command=upload_file).grid(row=0, column=4, padx=10)
-    Button(button_frame, text="Download", width=12, height=1, bg="orange", fg="black", command=download_file).grid(row=0, column=5, padx=10)
-    Button(button_frame, text="Move", width=10, height=1, bg="brown", fg="white", command=move_file).grid(row=0, column=6, padx=10)
+    refresh_button = Button(button_frame, text="Refresh", width=10, height=1, bg="blue", fg="white", command=lambda: load_files(current_path))
+    refresh_button.grid(row=0, column=0, padx=10)
+    delete_button = Button(button_frame, text="Delete", width=10, height=1, bg="red", fg="white", command=delete_file)
+    delete_button.grid(row=0, column=1, padx=10)
+    rename_button = Button(button_frame, text="Rename", width=10, height=1, bg="yellow", fg="black", command=rename_file)
+    rename_button.grid(row=0, column=2, padx=10)
+    create_folder_button = Button(button_frame, text="Create Folder", width=12, height=1, bg="cyan", fg="black", command=create_folder)
+    create_folder_button.grid(row=0, column=3, padx=10)
+    upload_button = Button(button_frame, text="Upload", width=10, height=1, bg="purple", fg="white", command=upload_file)
+    upload_button.grid(row=0, column=4, padx=10)
+    download_button = Button(button_frame, text="Download", width=12, height=1, bg="orange", fg="black", command=download_file)
+    download_button.grid(row=0, column=5, padx=10)
+    move_button = Button(button_frame, text="Move", width=10, height=1, bg="brown", fg="white", command=move_file)
+    move_button.grid(row=0, column=6, padx=10)
+    send_button = Button(button_frame, text="Send", width=10, height=1, bg="green", fg="white", command=send_window)
+    send_button.grid(row=0, column=7, padx=10)
+    receive_button = Button(button_frame, text="Receive", width=10, height=1, bg="black", fg="white", command=receive_window)
+    receive_button.grid(row=0, column=8, padx=10)
     back_button = Button(button_frame, text="Back", width=10, height=1, bg="gray", fg="white", command=back, state=DISABLED)
-    back_button.grid(row=0, column=7, padx=10)
+    back_button.grid(row=0, column=9, padx=10)
 
+    file_display_frame = Frame(root, bg="#1e1e1e")
+    file_display_frame.pack(fill=BOTH, expand=YES)
     load_files(current_path)
 
-    window.mainloop()
+    root.mainloop()
 
-# Start the application
+# Application Starts Here
 login_window()
