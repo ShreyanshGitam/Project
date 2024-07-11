@@ -1,10 +1,13 @@
 import os
 import socket
+import sqlite3
+from datetime import datetime
 from tkinter import *
 from tkinter import filedialog, messagebox
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.backends import default_backend
+import bcrypt
 
 # AES key for encryption
 KEY = b'0123456789abcdef'  # 16-byte key for AES-128
@@ -13,6 +16,13 @@ KEY = b'0123456789abcdef'  # 16-byte key for AES-128
 send_image = None
 receive_image = None
 image_icon1 = None
+
+# Database setup
+conn = sqlite3.connect('users.db')
+c = conn.cursor()
+c.execute('''CREATE TABLE IF NOT EXISTS users
+             (username TEXT PRIMARY KEY, password_hash TEXT, created_at TEXT)''')
+conn.commit()
 
 def load_images():
     global send_image, receive_image, image_icon1, imageicon
@@ -45,9 +55,30 @@ def decrypt(encrypted_data, key):
     decrypted_data = unpadder.update(decrypted_padded_data) + unpadder.finalize()
     return decrypted_data
 
+def hash_password(password):
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(password.encode(), salt)
+    return hashed
+
+def check_password(password, hashed):
+    return bcrypt.checkpw(password.encode(), hashed)
+
 def authenticate(username, password):
-    # Simple authentication logic (replace with real authentication)
-    return username == "admin" and password == "password"
+    c.execute("SELECT password_hash FROM users WHERE username=?", (username,))
+    result = c.fetchone()
+    if result and check_password(password, result[0]):
+        return True
+    return False
+
+def register(username, password):
+    hashed_password = hash_password(password)
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        c.execute("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)", (username, hashed_password, created_at))
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
 
 def login_window():
     global root
@@ -76,9 +107,43 @@ def login_window():
         else:
             messagebox.showerror("Login Failed", "Invalid username or password")
 
+    def open_register():
+        register_window()
+
     Button(root, text="Login", width=10, height=1, bg="blue", fg="white", command=login).place(x=130, y=150)
+    Button(root, text="Register", width=10, height=1, bg="green", fg="white", command=open_register).place(x=50, y=150)
 
     root.mainloop()
+
+def register_window():
+    window = Toplevel(root)
+    window.title("Register")
+    window.geometry("300x250")
+    center_window(window, 300, 250)
+    window.configure(bg="#1e1e1e")
+    window.resizable(False, False)
+
+    Label(window, text="Username:", bg="#1e1e1e", fg="#ffffff").place(x=50, y=50)
+    username_entry = Entry(window, width=25, fg="black", border=2, bg='white')
+    username_entry.place(x=130, y=50)
+    username_entry.focus()
+
+    Label(window, text="Password:", bg="#1e1e1e", fg="#ffffff").place(x=50, y=100)
+    password_entry = Entry(window, width=25, fg="black", border=2, bg='white', show='*')
+    password_entry.place(x=130, y=100)
+
+    def register_user():
+        username = username_entry.get()
+        password = password_entry.get()
+        if register(username, password):
+            messagebox.showinfo("Success", "Registration successful")
+            window.destroy()
+        else:
+            messagebox.showerror("Error", "Username already exists")
+
+    Button(window, text="Register", width=10, height=1, bg="green", fg="white", command=register_user).place(x=130, y=150)
+
+    window.mainloop()
 
 def main_window():
     global root
