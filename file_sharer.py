@@ -37,6 +37,7 @@ conn.commit()
 if not os.path.exists(STORAGE_DIR):
     os.makedirs(STORAGE_DIR)
 
+
 def load_images():
     global image_cache
     image_cache = {}
@@ -58,12 +59,14 @@ def load_images():
     image_cache['zip'] = load_image("Images/zip.png")
     image_cache['folder'] = load_image("Images/folder.png")
 
+
 def center_window(window, width, height):
     screen_width = window.winfo_screenwidth()
     screen_height = window.winfo_screenheight()
     x = (screen_width // 2) - (width // 2)
     y = (screen_height // 2) - (height // 2)
     window.geometry(f'{width}x{height}+{x}+{y}')
+
 
 def encrypt(data, key):
     padder = padding.PKCS7(algorithms.AES.block_size).padder()
@@ -84,13 +87,17 @@ def decrypt(encrypted_data, key):
     decrypted_data = unpadder.update(decrypted_padded_data) + unpadder.finalize()
     return decrypted_data
 
+
+
 def hash_password(password):
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(password.encode(), salt)
     return hashed
 
+
 def check_password(password, hashed):
     return bcrypt.checkpw(password.encode(), hashed)
+
 
 def authenticate(username, password):
     c.execute("SELECT password_hash FROM users WHERE username=?", (username,))
@@ -98,6 +105,7 @@ def authenticate(username, password):
     if result and check_password(password, result[0]):
         return True
     return False
+
 
 def register(username, password):
     hashed_password = hash_password(password)
@@ -111,6 +119,7 @@ def register(username, password):
         return True
     except sqlite3.IntegrityError:
         return False
+
 
 def login_window():
     global root, current_user
@@ -149,6 +158,7 @@ def login_window():
 
     root.mainloop()
 
+
 def register_window():
     window = Toplevel(root)
     window.title("Register")
@@ -179,13 +189,16 @@ def register_window():
 
     window.mainloop()
 
+
 def generate_code():
     return str(random.randint(1000, 9999))
+
 
 def generate_aes_key():
     return os.urandom(16)
 
-def send_file(key_label):
+
+def send_file(new_key, key_label):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -195,10 +208,15 @@ def send_file(key_label):
         s.listen(1)
         conn, addr = s.accept()
         with open(selected_file_path, 'rb') as file:
-            encrypted_data = file.read()
-        decrypted_data = decrypt(encrypted_data, KEY)
-        new_key = generate_aes_key()
+            file_data = file.read()
+        decrypted_data = decrypt(file_data, KEY)
         re_encrypted_data = encrypt(decrypted_data, new_key)
+
+        # Send the file name and size first
+        file_name = os.path.basename(selected_file_path)
+        file_size = len(re_encrypted_data)
+        conn.sendall(f"{file_name}\n{file_size}\n".encode())
+        # Then send the file data
         conn.sendall(re_encrypted_data)
         conn.close()
         s.close()
@@ -215,41 +233,55 @@ def send_window():
     window.configure(bg="#1e1e1e")
     window.resizable(False, False)
 
+    new_key = generate_aes_key()
+    key_label_text = f"New AES Key: {new_key.hex()}"
+
     def start_sending():
-        threading.Thread(target=send_file, args=(key_label,)).start()
+        threading.Thread(target=send_file, args=(new_key, key_label)).start()
+
+    def copy_to_clipboard():
+        root.clipboard_clear()
+        root.clipboard_append(new_key.hex())
+        root.update()  # Keeps the clipboard contents after the window is closed
+        messagebox.showinfo("Copied", "AES Key copied to clipboard")
 
     host = socket.gethostname()
     Label(window, text=f'Your Device ID: {host}', font='Verdana 12 bold', bg='#1e1e1e', fg='white').place(x=10, y=10)
     file_label = Label(window, text="Selected file: " + (selected_file_path if selected_file_path else "No file selected"), bg='#1e1e1e', fg='white')
     file_label.place(x=10, y=50)
     Button(window, text="SEND", width=12, height=1, font='arial 12 bold', bg='#000', fg="#fff", command=start_sending).place(x=10, y=80)
-    key_label = Label(window, text="", bg='#1e1e1e', fg='white')
+    key_label = Label(window, text=key_label_text, bg='#1e1e1e', fg='white')
     key_label.place(x=10, y=120)
+    Button(window, text="Copy Key", width=12, height=1, font='arial 12 bold', bg='#007ACC', fg='#fff', command=copy_to_clipboard).place(x=10, y=160)
     window.mainloop()
 
-def receive_file(sender_id, aes_key):
+
+def receive_file(sender_id):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        host = sender_id
         port = 8080
-        s.connect((host, port))
+        s.connect((sender_id, port))
+        # Receive the file name and size first
+        header = s.recv(1024).split(b'\n')
+        file_name = header[0].decode()
+        file_size = int(header[1].decode())
         all_data = b""
-        while True:
+        while len(all_data) < file_size:
             data = s.recv(1024)
             if not data:
                 break
             all_data += data
-        new_key = bytes.fromhex(aes_key)
-        decrypted_data = decrypt(all_data, new_key)
-        encrypted_data = encrypt(decrypted_data, KEY)
+        s.close()
         user_dir = os.path.join(STORAGE_DIR, f"{current_user}_dir", "received_files")
         if not os.path.exists(user_dir):
             os.makedirs(user_dir)
-        filename = f"received_file_{generate_code()}.bin"
-        with open(os.path.join(user_dir, filename), 'wb') as file:
-            file.write(encrypted_data)
-        s.close()
-        messagebox.showinfo("Success", f"File has been received and saved as {filename}")
+        filepath = os.path.join(user_dir, file_name)
+        with open(filepath, 'wb') as file:
+            file.write(all_data)
+        messagebox.showinfo("Success", f"File has been received and saved as {file_name}")
+        ask_for_key(filepath)
+    except socket.gaierror:
+        messagebox.showerror("Error", "Hostname could not be resolved. Please check the sender's Device ID.")
     except Exception as e:
         messagebox.showerror("Error", f"An error occurred: {e}")
 
@@ -263,8 +295,7 @@ def receive_window():
 
     def start_receiving():
         sender_id = senderID.get()
-        aes_key = keyEntry.get()
-        threading.Thread(target=receive_file, args=(sender_id, aes_key)).start()
+        threading.Thread(target=receive_file, args=(sender_id,)).start()
 
     Label(window, text="Receive Window", font=('Arial', 20), bg="#1e1e1e", fg="#ffffff").place(x=110, y=0)
     Label(window, text="Input sender ID", font=('arial', 10, 'bold'), bg="#1e1e1e", fg="#ffffff").place(x=20, y=50)
@@ -272,14 +303,43 @@ def receive_window():
     senderID.place(x=20, y=75)
     senderID.focus()
 
-    Label(window, text="Input AES key", font=('arial', 10, 'bold'), bg="#1e1e1e", fg="#ffffff").place(x=20, y=110)
-    keyEntry = Entry(window, width=25, fg="black", border=2, bg='white', font=('arial', 15))
-    keyEntry.place(x=20, y=135)
-
     rr = Button(window, text="Receive", compound=LEFT, width=13, bg="#39c790", font="arial 14 bold", command=start_receiving)
     rr.place(x=135, y=190)
 
     window.mainloop()
+
+def ask_for_key(filepath):
+    def decrypt_file():
+        aes_key = key_entry.get()
+        if aes_key:
+            try:
+                with open(filepath, 'rb') as file:
+                    encrypted_data = file.read()
+                decrypted_data = decrypt(encrypted_data, bytes.fromhex(aes_key))
+                with open(filepath, 'wb') as file:
+                    file.write(decrypted_data)
+                messagebox.showinfo("Success", "File has been decrypted successfully!")
+                key_window.destroy()
+            except ValueError as e:
+                messagebox.showerror("Error", "Decryption failed. Invalid key or data corruption.")
+        else:
+            messagebox.showwarning("Warning", "AES key is required to decrypt the file.")
+
+    key_window = Toplevel(root)
+    key_window.title("Enter AES Key")
+    key_window.geometry('300x150')
+    center_window(key_window, 300, 150)
+    key_window.configure(bg="#1e1e1e")
+    key_window.resizable(False, False)
+
+    Label(key_window, text="Enter AES Key:", font=('Arial', 12), bg="#1e1e1e", fg="#ffffff").place(x=20, y=20)
+    key_entry = Entry(key_window, width=25, fg="black", border=2, bg='white', font=('Arial', 12))
+    key_entry.place(x=20, y=50)
+    key_entry.focus()
+
+    Button(key_window, text="Decrypt", width=10, height=1, bg="green", fg="white", command=decrypt_file).place(x=100, y=90)
+    key_window.mainloop()
+
 
 def file_management_window():
     global root, current_path, selected_file_path, selected_folder_path, move_mode
@@ -515,6 +575,7 @@ def file_management_window():
     load_files(current_path)
 
     root.mainloop()
+
 
 # Application Starts Here
 login_window()
