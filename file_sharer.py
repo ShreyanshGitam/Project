@@ -261,6 +261,8 @@ def send_window():
         key_label.place(x=10, y=260)
         Button(window, text="Copy Key", width=12, height=1, font='arial 12 bold', bg='#007ACC', fg='#fff', command=copy_to_clipboard).place(x=200, y=220)
         window.mainloop()
+    else:
+        messagebox.showerror("Error", "No files selected")
 
 
 
@@ -288,7 +290,6 @@ def receive_files(sender_id, aes_key):
                 if not data:
                     break
                 all_data += data
-
             if not all_data:
                 break
 
@@ -306,11 +307,8 @@ def receive_files(sender_id, aes_key):
             filepath = os.path.join(user_dir, file_name)
             with open(filepath, 'wb') as file:
                 file.write(decrypted_data)
-
             os.remove(temp_filepath)  # Remove the temporary encrypted file
-
             messagebox.showinfo("Success", f"File has been received and saved as {file_name}")
-
         s.close()
     except socket.gaierror:
         messagebox.showerror("Error", "Hostname could not be resolved. Please check the sender's Device ID.")
@@ -318,11 +316,12 @@ def receive_files(sender_id, aes_key):
         messagebox.showerror("Error", f"An error occurred: {e}")
 
 
+
 def receive_window():
     window = Toplevel(root)
     window.title("Receive")
     window.geometry('400x300')
-    center_window(window, 400, 300)
+    center_window(window, 320, 170)
     window.configure(bg="#1e1e1e")
     window.resizable(False, False)
 
@@ -330,14 +329,14 @@ def receive_window():
         sender_id = senderID.get()
         threading.Thread(target=receive_files, args=(sender_id,)).start()
 
-    Label(window, text="Receive Window", font=('Arial', 20), bg="#1e1e1e", fg="#ffffff").place(x=110, y=0)
+    Label(window, text="Receive Window", font=('Arial', 20), bg="#1e1e1e", fg="#ffffff").place(x=60, y=0)
     Label(window, text="Input sender ID", font=('arial', 10, 'bold'), bg="#1e1e1e", fg="#ffffff").place(x=20, y=50)
     senderID = Entry(window, width=25, fg="black", border=2, bg='white', font=('arial', 15))
     senderID.place(x=20, y=75)
     senderID.focus()
 
     rr = Button(window, text="Receive", compound=LEFT, width=13, bg="#39c790", font="arial 14 bold", command=start_receiving)
-    rr.place(x=135, y=190)
+    rr.place(x=75, y=110)
 
     window.mainloop()
 
