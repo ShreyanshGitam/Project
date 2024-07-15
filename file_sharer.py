@@ -248,18 +248,24 @@ def send_window():
             messagebox.showinfo("Copied", "AES Key copied to clipboard")
 
         host = socket.gethostname()
-        Label(window, text=f'Your Device ID: {host}', font='Verdana 12 bold', bg='#1e1e1e', fg='white').place(x=10, y=10)
-        file_label = Label(window, text="Selected files: " + (", ".join([os.path.basename(f) for f in selected_files]) if selected_files else "No files selected"), bg='#1e1e1e', fg='white')
-        file_label.place(x=10, y=50)
-        Button(window, text="SEND", width=12, height=1, font='arial 12 bold', bg='#000', fg="#fff", command=start_sending).place(x=10, y=80)
+        Label(window, text=f'Sending Files to: {host}', font='Verdana 12 bold', bg='#1e1e1e', fg='white').place(x=10, y=10)
+
+        # Create a Listbox to display the selected files
+        listbox = Listbox(window, bg='#1e1e1e', fg='white', selectbackground='blue', highlightbackground='#1e1e1e', font=('Arial', 12), height=10)
+        for i, file in enumerate(selected_files, 1):
+            listbox.insert(END, f"{i}. {os.path.basename(file)}")
+        listbox.place(x=10, y=50, width=380, height=150)
+
+        Button(window, text="SEND", width=12, height=1, font='arial 12 bold', bg='#000', fg="#fff", command=start_sending).place(x=10, y=220)
         key_label = Label(window, text=key_label_text, bg='#1e1e1e', fg='white')
-        key_label.place(x=10, y=120)
-        Button(window, text="Copy Key", width=12, height=1, font='arial 12 bold', bg='#007ACC', fg='#fff', command=copy_to_clipboard).place(x=10, y=160)
+        key_label.place(x=10, y=260)
+        Button(window, text="Copy Key", width=12, height=1, font='arial 12 bold', bg='#007ACC', fg='#fff', command=copy_to_clipboard).place(x=200, y=220)
         window.mainloop()
 
 
 
-def receive_files(sender_id):
+
+def receive_files(sender_id, aes_key):
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         port = 8080
@@ -286,17 +292,31 @@ def receive_files(sender_id):
             if not all_data:
                 break
 
+            # Save the received encrypted file data temporarily
+            temp_filepath = os.path.join(user_dir, f"temp_{file_name}")
+            with open(temp_filepath, 'wb') as file:
+                file.write(all_data)
+
+            # Decrypt the file with the provided key
+            with open(temp_filepath, 'rb') as file:
+                encrypted_data = file.read()
+            decrypted_data = decrypt(encrypted_data, bytes.fromhex(aes_key))
+
+            # Save the decrypted file
             filepath = os.path.join(user_dir, file_name)
             with open(filepath, 'wb') as file:
-                file.write(all_data)
+                file.write(decrypted_data)
+
+            os.remove(temp_filepath)  # Remove the temporary encrypted file
+
             messagebox.showinfo("Success", f"File has been received and saved as {file_name}")
-            ask_for_key(filepath)
 
         s.close()
     except socket.gaierror:
         messagebox.showerror("Error", "Hostname could not be resolved. Please check the sender's Device ID.")
     except Exception as e:
         messagebox.showerror("Error", f"An error occurred: {e}")
+
 
 def receive_window():
     window = Toplevel(root)
